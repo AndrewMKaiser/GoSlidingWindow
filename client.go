@@ -69,7 +69,7 @@ func main() {
 	
 
 	fmt.Printf("Enter string to send to %s:%s : ", os.Args[1], os.Args[2]) /* prompts user to enter string and displays server IP and port number */
-	userString, err = inputReader.ReadString('\n')
+	userString, err = inputReader.ReadString('\n') /* reads all chars entered by user, including whitespace, up to and including newline char */
 	if err != nil {
 		log.Fatalf("Error with user input: %q\n", err)
 	}
@@ -86,21 +86,23 @@ func main() {
 		fmt.Printf("Only wrote %d length bytes (non-fatal)\n", bytesWritten)
 	}
 
-	go func() { /* goroutine to listen for server ACKS */
+	go func() { /* goroutine (lightweight thread) to listen for server ACKS */ 
 		for {
 			bytesRead, _, err := udpSocket.ReadFromUDP(ackBuffer)
 			if err != nil {
-				fmt.Printf("Failed to read ack from server (non-fatal): %q\n", err)
+				netErr, ok := err.(net.Error) /* asserts error to check for possible timeout - found at https://stackoverflow.com/questions/23494950/specifically-check-for-timeout-error */
+            	if ok && netErr.Timeout() {
+                	continue /* ignore if it's a timeout */
+            	}
+				fmt.Printf("Failed to read ACK from server (non-fatal): %q\n", err)
 			}
-			fmt.Sscanf(string(ackBuffer[:bytesRead]), "%11d", &ackNumber)
-			ackChannel <- ackNumber
+			fmt.Sscanf(string(ackBuffer[:bytesRead]), "%11d", &ackNumber) /* moves server ACK into ackNumber */
+			ackChannel <- ackNumber /* sends ACK down to main thread through ackChannel */
 		}
 	}()
 
 	stringSegments := segmentString(userString)
 	
-	udpSocket.SetReadDeadline(time.Now().Add(5 * time.Second))
-
     windowStartSeqNumber := 0
     // for windowStartSeqNumber < len(stringSegments) {
     //     /* send segments up to window size */
@@ -109,20 +111,26 @@ func main() {
     //         nextSeqNumber += 2
     //     }
 	// }
-
+	
 	for windowStartSeqNumber < len(stringSegments) {
+
+		udpSocket.SetReadDeadline(time.Now().Add(5 * time.Second))
+
 		select {
 		case ackReceived := <-ackChannel:
-			if ackReceived == windowStartSeqNumber {
-				windowStartSeqNumber += 2
+			if ackReceived > windowStartSeqNumber {
+				windowStartSeqNumber = ackReceived + 2
 			}
-	
-		case <-time.After(time.Second * 5): /* timeout after 2 seconds */
+
+			udpSocket.SetReadDeadline(time.Time{}) /* resets timeout every time an ACK is received */
+
+		case <-time.After(5 * time.Second): /* timeout after 5 seconds */
 			/* Resend packets starting from windowStartSeqNumber */
 			fmt.Printf("Resending packets\n")
 			for i := windowStartSeqNumber; i < windowStartSeqNumber + windowSize && i < len(stringSegments); i++ {
 				sendSegment(i * 2, stringSegments[i], buffer, udpSocket)
 			}
+			udpSocket.SetReadDeadline(time.Now().Add(5 * time.Second))
 		}
 	}
 
