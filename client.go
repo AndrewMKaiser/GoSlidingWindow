@@ -79,9 +79,8 @@ func main() {
 
 	userString = strings.TrimSuffix(userString, "\n") /* gets rid of trailing newline char */
 
-	stringSegments := segmentString(userString)
-	fmt.Printf("stringSegments: %q", stringSegments)
-
+	stringSegments := segmentString(userString) /* stores a slice of 2-character string segments */
+ 
 	binary.BigEndian.PutUint32(buffer, uint32(len(userString))) /* writes the length of the string to the lengthBuffer in network order (big endian) */
 
 	bytesWritten, err := udpSocket.Write(buffer[:4]) /* writes string length to socket "WE WILL ASSUME IT GETS TO THE SERVER" */
@@ -98,11 +97,11 @@ func main() {
 			if err != nil {
 				netErr, ok := err.(net.Error) /* asserts error to check for possible timeout - found at https://stackoverflow.com/questions/23494950/specifically-check-for-timeout-error */
             	if ok && netErr.Timeout() {
-                	continue /* ignore if it's a timeout */
+                	continue /* ignore if it's a timeout */ 
             	}
 			}
 			fmt.Sscanf(string(ackBuffer[:bytesRead]), "%11d", &ackNumber) /* moves server ACK into ackNumber */
-			fmt.Printf("%d\n", ackNumber)
+			fmt.Printf("Received ACK: %d\n", ackNumber)
 
 			if ackNumber == windowStartSeqNumber { /* slides window forward by 2 bytes if the ACK is the same as the window start index */
 				windowStartSeqNumber += 2
@@ -124,16 +123,11 @@ func main() {
 		
 		select {
 		case ackReceived := <-ackChannel: /* executes if ACK received from server */
-			if ackReceived == windowStartSeqNumber { /* slides window up to ACK (cumulative ACK) */
+			if ackReceived >= windowStartSeqNumber { /* slides window up to ACK */
 				windowStartSeqNumber = ackReceived + 2 
 				windowEndSeqNumber = windowStartSeqNumber + 10
 				nextSeqNumber = windowStartSeqNumber
-
-				if windowEndSeqNumber / 2 > len(stringSegments) {
-					fmt.Printf("Sending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, len(stringSegments))
-				} else {
-					fmt.Printf("Sending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, windowEndSeqNumber / 2 + 1)
-				}
+				fmt.Printf("Sending\n")
 				if nextSeqNumber / 2 < len(stringSegments) {
 					sendSegment(nextSeqNumber, stringSegments[nextSeqNumber / 2], buffer, udpSocket)
 					nextSeqNumber += 2
