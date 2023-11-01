@@ -30,11 +30,11 @@ func segmentString(userString string) [][]byte {
 
 func sendSegment(seqNumber int, stringSegment []byte, buffer []byte, socket *net.UDPConn) {
 
-	packet := fmt.Sprintf("%11d%4d", seqNumber, len(stringSegment))
-	copy(buffer, packet)
-	copy(buffer[len(packet):], stringSegment)
+	packet := fmt.Sprintf("%11d%4d", seqNumber, len(stringSegment)) /* copies header into buffer as shown in Canvas */
+	copy(buffer, packet) /* copies the header into the buffer */
+	copy(buffer[len(packet):], stringSegment) /* copies string data into the packet to be sent */
 
-	_, err := socket.Write(buffer)
+	_, err := socket.Write(buffer[:len(packet) + len(stringSegment)]) /* accounts for strings of odd length */
 	if err != nil {
 		log.Fatalf("Segment send failure: %q\n", err)
 	}
@@ -92,15 +92,7 @@ func main() {
 		fmt.Printf("Only wrote %d length bytes (non-fatal)\n", bytesWritten)
 	}
 
-	
-
-	for nextSeqNumber < windowEndSeqNumber && nextSeqNumber/2 < len(stringSegments) {
-		sendSegment(nextSeqNumber, stringSegments[nextSeqNumber/2], buffer, udpSocket)
-		nextSeqNumber += 2
-	}
-	
-
-	go func() { /* goroutine (thread) to listen for server ACKS */ 
+	go func() { /* goroutine (thread) to listen for server ACKs */ 
 		for {
 			bytesRead, _, err := udpSocket.ReadFromUDP(ackBuffer)
 			if err != nil {
@@ -108,15 +100,14 @@ func main() {
             	if ok && netErr.Timeout() {
                 	continue /* ignore if it's a timeout */
             	}
-				fmt.Printf("Failed to read ACK from server (non-fatal): %q\n", err)
 			}
 			fmt.Sscanf(string(ackBuffer[:bytesRead]), "%11d", &ackNumber) /* moves server ACK into ackNumber */
+			fmt.Printf("%d\n", ackNumber)
 
-			if ackNumber == windowStartSeqNumber {
+			if ackNumber == windowStartSeqNumber { /* slides window forward by 2 bytes if the ACK is the same as the window start index */
 				windowStartSeqNumber += 2
 				windowEndSeqNumber += 2
 			}
-			fmt.Printf("ACK number: %d\n", ackNumber)
 			ackChannel <- ackNumber /* sends ACK down to main thread through ackChannel */
 		}
 	}()
@@ -127,16 +118,22 @@ func main() {
 	}
 	
 	
-	for windowStartSeqNumber / 2 < len(stringSegments) {
+	for windowStartSeqNumber / 2 < len(stringSegments) { /* executes as long as there are segments left to send */
 
-		udpSocket.SetReadDeadline(time.Now().Add(1 * time.Second))
+		udpSocket.SetReadDeadline(time.Now().Add(1 * time.Second)) /* timeout = 1 sec */
 		
 		select {
-		case ackReceived := <-ackChannel:
-			if ackReceived >= windowStartSeqNumber {
-				windowStartSeqNumber = ackReceived + 2
+		case ackReceived := <-ackChannel: /* executes if ACK received from server */
+			if ackReceived == windowStartSeqNumber { /* slides window up to ACK (cumulative ACK) */
+				windowStartSeqNumber = ackReceived + 2 
 				windowEndSeqNumber = windowStartSeqNumber + 10
 				nextSeqNumber = windowStartSeqNumber
+
+				if windowEndSeqNumber / 2 > len(stringSegments) {
+					fmt.Printf("Sending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, len(stringSegments))
+				} else {
+					fmt.Printf("Sending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, windowEndSeqNumber / 2 + 1)
+				}
 				if nextSeqNumber / 2 < len(stringSegments) {
 					sendSegment(nextSeqNumber, stringSegments[nextSeqNumber / 2], buffer, udpSocket)
 					nextSeqNumber += 2
@@ -144,9 +141,12 @@ func main() {
 				udpSocket.SetReadDeadline(time.Time{})
 			}
 	
-		case <-time.After(1 * time.Second):
-			// Timeout, resend all outstanding frames in the window
-			fmt.Printf("Resending packets\n")
+		case <-time.After(1 * time.Second): /* executes if timeout - resends all packets in window */
+			if windowEndSeqNumber / 2 > len(stringSegments) {
+				fmt.Printf("Resending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, len(stringSegments))
+			} else {
+				fmt.Printf("Resending packets #%d through #%d\n", windowStartSeqNumber / 2 + 1, windowEndSeqNumber / 2 + 1)
+			}
 			for i := windowStartSeqNumber; i < windowEndSeqNumber && i / 2 < len(stringSegments); i += 2 {
 				sendSegment(i, stringSegments[i/2], buffer, udpSocket)
 			}
