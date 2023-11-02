@@ -50,9 +50,9 @@ func main() {
 	ackBuffer := make([]byte, 11) /* buffer to store ACK from server */
 	ackChannel := make(chan int) /* channel used to send ACK back to main() */
 	var ackNumber int
-	const windowSize int = 5 /* 5 instead of 10 since data will be sent in 2-byte segments (5 segment max window size)*/
+	const windowSize int = 10 /* 10 byte window size */
 	var windowStartSeqNumber int = 0
-	var windowEndSeqNumber int = windowSize * 2
+	var windowEndSeqNumber int = windowSize
 	var nextSeqNumber int = 0
 	
 	if len(os.Args) > 3 {
@@ -125,7 +125,7 @@ func main() {
 		case ackReceived := <-ackChannel: /* executes if ACK received from server */
 			if ackReceived >= windowStartSeqNumber { /* slides window up to ACK */
 				windowStartSeqNumber = ackReceived + 2 
-				windowEndSeqNumber = windowStartSeqNumber + 10
+				windowEndSeqNumber = windowStartSeqNumber + windowSize
 				nextSeqNumber = windowStartSeqNumber
 				fmt.Printf("Sending\n")
 				if nextSeqNumber / 2 < len(stringSegments) {
